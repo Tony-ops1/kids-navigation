@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="sl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#0f172a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Kids Nav">
+<title>Kids Navigation</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+*{box-sizing:border-box}html,body,#map{height:100%;margin:0}body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0f172a;overflow:hidden}
+#map{position:absolute;inset:0}.hud{position:absolute;z-index:1000;left:12px;right:12px;top:max(12px,env(safe-area-inset-top));background:rgba(15,23,42,.92);color:#fff;border-radius:18px;padding:11px 13px;box-shadow:0 8px 28px #0005;backdrop-filter:blur(10px)}
+.stats{display:flex;gap:15px;font-weight:900;align-items:center}.dist{margin-left:auto;color:#cbd5e1;font-size:13px}.next{margin-top:8px;padding-top:8px;border-top:1px solid #ffffff20;font-weight:800;font-size:14px;display:none}
+.controls{position:absolute;z-index:1000;left:12px;right:12px;bottom:max(12px,env(safe-area-inset-bottom));display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:8px}
+button{border:0;border-radius:16px;padding:13px 8px;font-weight:850;font-size:14px;background:#fff;color:#111827;box-shadow:0 6px 20px #0004}.green{background:#16a34a;color:white}.orange{background:#f59e0b}
+.panel{position:absolute;z-index:1100;left:12px;right:12px;bottom:80px;background:rgba(15,23,42,.96);color:#fff;border-radius:20px;padding:14px;display:none}.panel p{color:#cbd5e1;font-size:14px;line-height:1.4}.row{display:flex;gap:8px}.row button{flex:1}
+.toast{position:absolute;z-index:2000;left:50%;top:44%;transform:translate(-50%,-50%) scale(.8);opacity:0;background:#0f172af2;color:#fff;padding:18px 24px;border-radius:24px;font-size:30px;font-weight:900;transition:.2s}.toast.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
+.coin,.star,.gift,.car{filter:drop-shadow(0 3px 3px #0006)}.coin{font-size:29px}.star{font-size:31px}.gift{font-size:33px}.car{font-size:31px}.leaflet-control-zoom{display:none}.leaflet-control-attribution{font-size:9px!important}
+.hint{position:absolute;z-index:999;right:12px;top:145px;max-width:155px;background:#fffffff2;color:#111827;padding:8px 10px;border-radius:14px;font-size:12px;font-weight:750;box-shadow:0 5px 18px #0003}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="hud">
+  <div class="stats"><span>🪙 <b id="coins">0</b></span><span>⭐ <b id="stars">0</b></span><span>🎁 <b id="gifts">0</b></span><span class="dist" id="dist">Čakam GPS…</span></div>
+  <div class="next" id="next">Tapni zemljevid za cilj.</div>
+</div>
+<div class="hint" id="hint">1) Začni GPS<br>2) Tapni cilj<br>3) Vozi – nagrade se pobirajo same</div>
+<div class="controls"><button class="green" id="gps">📍 Začni GPS</button><button id="new">🗺️ Nova pot</button><button class="orange" id="menu">⚙️ Meni</button></div>
+<div class="panel" id="panel"><b>Kids Navigation</b><p>Med vožnjo ni treba nič pritiskati. Kovanec je približno vsakih 300 m in se pobere sam v radiju 45 m.</p><div class="row"><button id="demo">▶️ Demo</button><button id="reset">🧹 Reset</button><button id="close">Zapri</button></div></div>
+<div class="toast" id="toast">🪙 +1</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(()=> {
+const $=id=>document.getElementById(id), SPACING=300, RADIUS=45;
+const map=L.map('map',{zoomControl:false}).setView([45.80,15.17],10);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; OpenStreetMap'}).addTo(map);
+const icon=(emoji,cls,size)=>L.divIcon({html:'<div class="'+cls+'">'+emoji+'</div>',className:'',iconSize:[size,size],iconAnchor:[size/2,size/2]});
+const coinI=icon('🪙','coin',34),starI=icon('⭐','star',36),giftI=icon('🎁','gift',38),carI=icon('🚗','car',38);
+let score=JSON.parse(localStorage.getItem('kidsNavScore')||'{"coins":0,"stars":0,"gifts":0}');
+let current=null,dest=null,car=null,destMark=null,line=null,route=[],rewards=[],watch=null,steps=[],step=0,demoTimer=null,demoIndex=0,centered=false;
+function save(){localStorage.setItem('kidsNavScore',JSON.stringify(score));$('coins').textContent=score.coins;$('stars').textContent=score.stars;$('gifts').textContent=score.gifts} save();
+function meters(a,b){const r=6371000,rad=x=>x*Math.PI/180,d1=rad(b[0]-a[0]),d2=rad(b[1]-a[1]),l1=rad(a[0]),l2=rad(b[0]),h=Math.sin(d1/2)**2+Math.cos(l1)*Math.cos(l2)*Math.sin(d2/2)**2;return 2*r*Math.asin(Math.sqrt(h))}
+function toast(t){$('toast').textContent=t;$('toast').classList.add('show');setTimeout(()=>$('toast').classList.remove('show'),850)}
+function beep(f=900){try{const C=window.AudioContext||window.webkitAudioContext,c=new C(),o=c.createOscillator(),g=c.createGain();o.frequency.value=f;o.connect(g);g.connect(c.destination);g.gain.setValueAtTime(.08,c.currentTime);g.gain.exponentialRampToValueAtTime(.001,c.currentTime+.09);o.start();o.stop(c.currentTime+.1)}catch(e){}}
+function update(pos){current=pos;if(!car)car=L.marker(pos,{icon:carI,zIndexOffset:1000}).addTo(map);else car.setLatLng(pos);if(!centered){map.setView(pos,16);centered=true}collect();distance();instruction()}
+function collect(){for(const r of rewards){if(!r.done&&meters(current,r.pos)<=RADIUS){r.done=true;map.removeLayer(r.marker);if(r.type==='coin'){score.coins++;toast('🪙 +1');beep(900)}else if(r.type==='star'){score.stars++;toast('⭐ +1');beep(1200)}else{score.gifts++;toast('🎁 Zaklad!');beep(650)}save()}}}
+function distance(){if(!current){$('dist').textContent='Čakam GPS…';return}if(!dest){$('dist').textContent='Izberi cilj';return}const d=meters(current,dest);$('dist').textContent=d<1000?Math.round(d)+' m do cilja':(d/1000).toFixed(1)+' km do cilja'}
+function textStep(s){const m=s.maneuver||{},t=m.type||'',mod=m.modifier||'',road=s.name?' na '+s.name:'';const d={'left':'levo','right':'desno','straight':'naravnost','slight left':'rahlo levo','slight right':'rahlo desno','sharp left':'ostro levo','sharp right':'ostro desno','uturn':'obrnite'}[mod]||mod;if(t==='arrive')return'Cilj je pred vami.';if(t==='depart')return'Začni pot'+road+'.';if(t==='roundabout'||t==='rotary')return'V krožišču izberi pravi izvoz'+road+'.';if(t==='turn')return'Zavij '+d+road+'.';if(t==='continue')return'Nadaljuj '+d+road+'.';return(d?'Nadaljuj '+d:'Nadaljuj')+road+'.'}
+function instruction(){if(!current||!steps.length)return;while(step<steps.length-1){const q=steps[step].maneuver.location;if(meters(current,[q[1],q[0]])<55)step++;else break}const s=steps[Math.min(step,steps.length-1)],q=s.maneuver.location,d=meters(current,[q[1],q[0]]);$('next').style.display='block';$('next').textContent=(d>25?Math.round(d/10)*10+' m • ':'')+textStep(s)}
+function points(coords,spacing){const out=[];let carry=spacing;for(let i=1;i<coords.length;i++){let a=coords[i-1],b=coords[i],seg=meters(a,b);while(seg>=carry){const t=carry/seg,p=[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t];out.push(p);a=p;seg=meters(a,b);carry=spacing}carry-=seg;if(carry<1)carry=spacing}return out}
+function addRewards(){rewards.forEach(r=>map.hasLayer(r.marker)&&map.removeLayer(r.marker));rewards=[];points(route,SPACING).forEach((p,i)=>{let type='coin',ic=coinI;if((i+1)%10===0){type='gift';ic=giftI}else if((i+1)%5===0){type='star';ic=starI}rewards.push({pos:p,type,done:false,marker:L.marker(p,{icon:ic,zIndexOffset:500}).addTo(map)})})}
+async function build(){if(!current||!dest){toast(!current?'📍 Najprej GPS':'📍 Izberi cilj');return}$('next').style.display='block';$('next').textContent='Računam pot…';const [a,b]=current,[c,d]=dest,u='https://router.project-osrm.org/route/v1/driving/'+b+','+a+';'+d+','+c+'?overview=full&geometries=geojson&steps=true';try{const x=await fetch(u),j=await x.json();if(!j.routes?.length)throw 0;const r=j.routes[0];route=r.geometry.coordinates.map(x=>[x[1],x[0]]);if(line)map.removeLayer(line);line=L.polyline(route,{weight:7,opacity:.8}).addTo(map);steps=(r.legs||[]).flatMap(l=>l.steps||[]);step=0;addRewards();map.fitBounds(line.getBounds(),{padding:[55,55]});$('hint').style.display='none';instruction();distance()}catch(e){$('next').textContent='Poti ni bilo mogoče izračunati.';toast('⚠️ Preveri internet')}}
+map.on('click',e=>{if(!current){toast('📍 Najprej GPS');return}dest=[e.latlng.lat,e.latlng.lng];if(destMark)map.removeLayer(destMark);destMark=L.marker(dest).addTo(map).bindPopup('🎯 Cilj').openPopup();build()});
+$('gps').onclick=()=>{if(!navigator.geolocation){toast('GPS ni podprt');return}if(watch!==null){navigator.geolocation.clearWatch(watch);watch=null;$('gps').textContent='📍 Začni GPS';return}$('gps').textContent='⏳ GPS…';watch=navigator.geolocation.watchPosition(p=>{update([p.coords.latitude,p.coords.longitude]);$('gps').textContent='✅ GPS vklopljen'},()=>{toast('Dovoli lokacijo v Safariju');$('gps').textContent='📍 Začni GPS'},{enableHighAccuracy:true,maximumAge:1000,timeout:12000})};
+$('new').onclick=()=>{rewards.forEach(r=>map.hasLayer(r.marker)&&map.removeLayer(r.marker));rewards=[];if(line){map.removeLayer(line);line=null}if(destMark){map.removeLayer(destMark);destMark=null}dest=null;route=[];steps=[];step=0;$('next').style.display='block';$('next').textContent='Tapni zemljevid za cilj.';$('hint').style.display='block';distance();if(current)map.setView(current,16)};
+$('menu').onclick=()=>$('panel').style.display='block';$('close').onclick=()=>$('panel').style.display='none';
+$('reset').onclick=()=>{score={coins:0,stars:0,gifts:0};save();toast('🧹 Ponastavljeno')};
+$('demo').onclick=()=>{ $('panel').style.display='none';if(!route.length){toast('Najprej izberi pot');return}if(demoTimer){clearInterval(demoTimer);demoTimer=null;toast('⏸️ Demo ustavljen');return}demoIndex=0;demoTimer=setInterval(()=>{if(demoIndex>=route.length){clearInterval(demoTimer);demoTimer=null;toast('🏁 Cilj!');return}update(route[demoIndex]);map.panTo(route[demoIndex],{animate:true,duration:.2});demoIndex+=Math.max(1,Math.floor(route.length/180))},300)};
+})();
+</script>
+</body>
+</html>
